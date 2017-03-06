@@ -22,7 +22,7 @@ def get_archives(cur):
     LEFT JOIN volume v ON b.volume_id = v.id
     LEFT JOIN maven_archives ma ON ma.archive_id = ai.id
     LEFT JOIN archivetypes at ON ai.type_id = at.id
-    WHERE ma.version LIKE '${%%}' or ma.group_id LIKE '${%%}' or ma.artifact_id LIKE '${%}'""")
+    WHERE ma.version LIKE '%%${%%' or ma.group_id LIKE '%%${%%' or ma.artifact_id LIKE '%%${%%'""")
     rows = cur.fetchall()
     return [dict(zip(('build_id', 'package_id', 'package', 'build_version', 'build_release', 'state', 'volume_name', 'filename', 'archive_type', 'extensions', 'archive_id', 'group_id', 'artifact_id', 'version'), row)) for row in rows]
 
@@ -33,7 +33,7 @@ def get_builds(cur):
     LEFT JOIN maven_builds mb ON mb.build_id = b.id
     LEFT JOIN package p ON p.id = b.pkg_id
     LEFT JOIN volume v ON b.volume_id = v.id
-    WHERE mb.version LIKE '${%%}' or mb.group_id LIKE '${%%}' or mb.artifact_id LIKE '${%%}'""")
+    WHERE mb.version LIKE '%%${%%' or mb.group_id LIKE '%%${%%' or mb.artifact_id LIKE '%%${%%'""")
     rows = cur.fetchall()
     return [dict(zip(('build_id', 'package_id', 'package', 'build_version','build_release',  'state', 'volume_name', 'group_id', 'artifact_id', 'version'), row)) for row in rows]
 
@@ -282,7 +282,7 @@ def gen_sql(table, id, changes, fields=None, id_field='id'):
         if old != new:
             if fields and field in fields:
                 field = fields[field]
-            sets.append('%s = %s' % (field, new))
+            sets.append('%s = \'%s\'' % (field, new))
     if sets:
         return 'UPDATE %s SET %s WHERE %s=%d' % (table, ', '.join(sets), id_field, id)
 
@@ -307,6 +307,7 @@ def link_file(src, des):
 
 def link_files(changes):
     # TODO
+    pass
 
 
 def main():
