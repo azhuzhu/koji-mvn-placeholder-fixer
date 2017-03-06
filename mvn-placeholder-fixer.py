@@ -15,7 +15,8 @@ import re
 
 
 def get_archives(cur):
-    cur.execute("""SELECT ai.build_id, p.id AS package_id, p.name AS package, b.version AS build_version, b.release as build_release, b.state, v.name AS volume_name, ai.filename, at.name AS archive_type, at.extensions, ma.archive_id, ma.group_id, ma.artifact_id, ma.version
+    cur.execute(
+        """SELECT ai.build_id, p.id AS package_id, p.name AS package, b.version AS build_version, b.release as build_release, b.state, v.name AS volume_name, ai.filename, at.name AS archive_type, at.extensions, ma.archive_id, ma.group_id, ma.artifact_id, ma.version
     FROM archiveinfo ai
     LEFT JOIN build b ON b.id = ai.build_id
     LEFT JOIN package p ON b.pkg_id = p.id
@@ -24,18 +25,43 @@ def get_archives(cur):
     LEFT JOIN archivetypes at ON ai.type_id = at.id
     WHERE ma.version LIKE '%%${%%' or ma.group_id LIKE '%%${%%' or ma.artifact_id LIKE '%%${%%'""")
     rows = cur.fetchall()
-    return [dict(zip(('build_id', 'package_id', 'package', 'build_version', 'build_release', 'state', 'volume_name', 'filename', 'archive_type', 'extensions', 'archive_id', 'group_id', 'artifact_id', 'version'), row)) for row in rows]
+    return [dict(zip(('build_id',
+                      'package_id',
+                      'package',
+                      'build_version',
+                      'build_release',
+                      'state',
+                      'volume_name',
+                      'filename',
+                      'archive_type',
+                      'extensions',
+                      'archive_id',
+                      'group_id',
+                      'artifact_id',
+                      'version'),
+                     row)) for row in rows]
 
 
 def get_builds(cur):
-    cur.execute("""SELECT b.id AS build_id, p.id AS package_id, p.name AS package, b.version AS build_version, b.release as build_release, b.state, v.name AS volume_name, mb.group_id, mb.artifact_id, mb.version
+    cur.execute(
+        """SELECT b.id AS build_id, p.id AS package_id, p.name AS package, b.version AS build_version, b.release as build_release, b.state, v.name AS volume_name, mb.group_id, mb.artifact_id, mb.version
     FROM build b
     LEFT JOIN maven_builds mb ON mb.build_id = b.id
     LEFT JOIN package p ON p.id = b.pkg_id
     LEFT JOIN volume v ON b.volume_id = v.id
     WHERE mb.version LIKE '%%${%%' or mb.group_id LIKE '%%${%%' or mb.artifact_id LIKE '%%${%%'""")
     rows = cur.fetchall()
-    return [dict(zip(('build_id', 'package_id', 'package', 'build_version','build_release',  'state', 'volume_name', 'group_id', 'artifact_id', 'version'), row)) for row in rows]
+    return [dict(zip(('build_id',
+                      'package_id',
+                      'package',
+                      'build_version',
+                      'build_release',
+                      'state',
+                      'volume_name',
+                      'group_id',
+                      'artifact_id',
+                      'version'),
+                     row)) for row in rows]
 
 
 def merge_data(archives, builds):
@@ -43,14 +69,49 @@ def merge_data(archives, builds):
     former_result = {'build_id': -1, 'archives': []}
     for archive in archives:
         if former_result['build_id'] != archive['build_id']:
-            former_result = dict((k, v) for k, v in archive.iteritems() if k in ['build_id', 'package_id', 'package', 'build_version', 'build_release', 'state', 'volume_name'])
+            former_result = dict(
+                (k,
+                 v) for k,
+                v in archive.iteritems() if k in [
+                    'build_id',
+                    'package_id',
+                    'package',
+                    'build_version',
+                    'build_release',
+                    'state',
+                    'volume_name'])
             former_result['archives'] = []
             results[former_result['build_id']] = former_result
-        former_result['archives'].append(dict((k, v) for k, v in archive.iteritems() if k in ['archive_id', 'filename', 'archive_type', 'extensions', 'group_id', 'artifact_id', 'version']))
+        former_result['archives'].append(
+            dict(
+                (k,
+                 v) for k,
+                v in archive.iteritems() if k in [
+                    'archive_id',
+                    'filename',
+                    'archive_type',
+                    'extensions',
+                    'group_id',
+                    'artifact_id',
+                    'version']))
     for build in builds:
         if build['build_id'] not in results:
-            results[build['build_id']] = dict((k, v) for k, v in build.iteritems() if k in ['build_id', 'package_id', 'package', 'build_version', 'build_release', 'state', 'volume_name'])
-        results[build['build_id']]['maven_build'] = dict((k, v) for k, v in build.iteritems() if k in ['group_id', 'artifact_id', 'version'])
+            results[
+                build['build_id']] = dict(
+                (k,
+                 v) for k,
+                v in build.iteritems() if k in [
+                    'build_id',
+                    'package_id',
+                    'package',
+                    'build_version',
+                    'build_release',
+                    'state',
+                    'volume_name'])
+        results[
+            build['build_id']]['maven_build'] = dict(
+            (k, v) for k, v in build.iteritems() if k in [
+                'group_id', 'artifact_id', 'version'])
         return results
 
 
@@ -65,15 +126,16 @@ def parse(build, cache, remote=False):
         if build['state'] != 2:
             # firstly for pom files
             for archive in archives:
-                (oripath, filepath, key, mavenpath) = get_pathinfo(buildinfo, archive, buildpath, remote)
+                (oripath, filepath, key, mavenpath) = get_pathinfo(
+                    buildinfo, archive, buildpath, remote)
                 # store maven path
                 archive['mavenpath'] = mavenpath
                 if archive['archive_type'] == 'pom':
                     if remote:
                         try:
                             download_pomfile(oripath, filepath)
-                        except Exception, e:
-                            print 'Downloading file: "%s" to "%s" failed...' % (oripath, filepath) 
+                        except Exception as e:
+                            print 'Downloading file: "%s" to "%s" failed...' % (oripath, filepath)
                             continue
                     for k, v in archive.copy().iteritems():
                         if k in ['group_id', 'artifact_id', 'version']:
@@ -89,12 +151,14 @@ def parse(build, cache, remote=False):
                                 if not placeholder:
                                     print 'Can not get placeholder in (%s,%s) for archive:\n%r' % (k, v, archive)
                                     continue
-                                val = get_placeholder_value(placeholder, filepath)
+                                val = get_placeholder_value(
+                                    placeholder, filepath)
                                 if val:
                                     val = prefix + val + suffix
                                 else:
                                     print 'Can not get val for placeholder: \'%s\' in pomfile: \'%s\'' % (placeholder, filepath)
-                                    # TODO can get the val from filename or package.name and build.version
+                                    # TODO can get the val from filename or
+                                    # package.name and build.version
                                     continue
                                 # set 'new_{key}' in archive
                                 archive['new_' + k] = val
@@ -102,8 +166,10 @@ def parse(build, cache, remote=False):
                                 cacheitem = {k: (v, val)}
                                 if key not in cache:
                                     cache[key] = {}
-                                    # also put it in cache by key = 'bid|filename_without_suffix'
-                                    file_key = '%s|%s' % (build['build_id'], archive['filename'][:-4])
+                                    # also put it in cache by key =
+                                    # 'bid|filename_without_suffix'
+                                    file_key = '%s|%s' % (
+                                        build['build_id'], archive['filename'][:-4])
                                     cache[file_key] = cache[key]
                                 # put it in cache by key = 'bid|g|a|v'
                                 cache[key].update(cacheitem)
@@ -112,10 +178,11 @@ def parse(build, cache, remote=False):
                     new_mavenpath = gen_mavenpath(archive, True)
                     if new_mavenpath != mavenpath:
                         archive['new_mavenpath'] = new_mavenpath
-            
+
             # second, for other files
             for archive in archives:
-                (oripath, filepath, key, mavenpath) = get_pathinfo(buildinfo, archive, buildpath, remote)
+                (oripath, filepath, key, mavenpath) = get_pathinfo(
+                    buildinfo, archive, buildpath, remote)
                 if archive['archive_type'] != 'pom':
                     # get from cache by key = 'bid|g|a|v'
                     cacheitems = cache.get(key, None)
@@ -156,7 +223,8 @@ def parse(build, cache, remote=False):
     # get the values from cache
     if 'maven_build' in build:
         maven_build = build['maven_build']
-        key = str(buildinfo['id']) + ('/%(group_id)s/%(artifact_id)s/%(version)s' % maven_build)
+        key = str(
+            buildinfo['id']) + ('/%(group_id)s/%(artifact_id)s/%(version)s' % maven_build)
         cacheitems = cache.get(key, None)
         if cacheitems:
             # update maven_build
@@ -169,7 +237,8 @@ def parse(build, cache, remote=False):
                 (old, new) = cacheitems['version']
                 if old == version:
                     build['new_build_version'] = new
-                    new_buildpath = koji.pathinfo.build(get_buildinfo(build, True))
+                    new_buildpath = koji.pathinfo.build(
+                        get_buildinfo(build, True))
                     if new_buildpath != buildpath:
                         build['new_buildpath'] = new_buildpath
             # TODO maybe require to check package.name
@@ -181,10 +250,18 @@ def get_pathinfo(buildinfo, archive, buildpath, remote):
     repopath = koji.pathinfo.mavenrepo(archive)
     oripath = os.path.join(buildpath, repopath, archive['filename'])
     if remote:
-        filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), ("vol/%(volume_name)s/packages/%(name)s/%(version)s/%(release)s" % buildinfo), 'maven', repopath, archive['filename'])
+        filepath = os.path.join(
+            os.path.dirname(
+                os.path.abspath(__file__)),
+            ("vol/%(volume_name)s/packages/%(name)s/%(version)s/%(release)s" %
+             buildinfo),
+            'maven',
+            repopath,
+            archive['filename'])
     else:
         filepath = oripath
-    key = str(buildinfo['id']) + ('/%(group_id)s/%(artifact_id)s/%(version)s' % archive)
+    key = str(buildinfo['id']) + \
+        ('/%(group_id)s/%(artifact_id)s/%(version)s' % archive)
     return (oripath, filepath, key, repopath)
 
 
@@ -230,7 +307,8 @@ def get_buildinfo(build, new=False):
 def get_placeholder_value(placeholder, pomfile):
     if placeholder == 'parent.version':
         placeholder = 'project.parent.version'
-    cmd = 'mvn org.apache.maven.plugins:maven-help-plugin:2.1.1:evaluate -Dexpression=\'%s\' -f \'%s\' | tail -8 | head -1' % (placeholder, pomfile)
+    cmd = 'mvn org.apache.maven.plugins:maven-help-plugin:2.1.1:evaluate -Dexpression=\'%s\' -f \'%s\' | tail -8 | head -1' % (
+        placeholder, pomfile)
     print 'Begin to execute cmd: %s' % cmd
     status, output = commands.getstatusoutput(cmd)
     if not status and '[ERROR]' not in output and ' ' not in output:
@@ -284,7 +362,8 @@ def gen_sql(table, id, changes, fields=None, id_field='id'):
                 field = fields[field]
             sets.append('%s = \'%s\'' % (field, new))
     if sets:
-        return 'UPDATE %s SET %s WHERE %s=%d' % (table, ', '.join(sets), id_field, id)
+        return 'UPDATE %s SET %s WHERE %s=%d' % (
+            table, ', '.join(sets), id_field, id)
 
 
 def gen_sqls(changedata):
@@ -292,18 +371,32 @@ def gen_sqls(changedata):
     for data in changedata:
         build_id = data['build_id']
         if 'build' in data:
-            sqls.append(gen_sql('build', build_id, data['build'], {'build_version': 'version'}))
+            sqls.append(
+                gen_sql(
+                    'build', build_id, data['build'], {
+                        'build_version': 'version'}))
         if 'maven_build' in data:
-            sqls.append(gen_sql('maven_builds', build_id, data['maven_build'], id_field='build_id'))
+            sqls.append(
+                gen_sql(
+                    'maven_builds',
+                    build_id,
+                    data['maven_build'],
+                    id_field='build_id'))
         if 'archives' in data:
             for k, c in data['archives']:
-                sqls.append(gen_sql('maven_archives', k, c, id_field='archive_id'))
+                sqls.append(
+                    gen_sql(
+                        'maven_archives',
+                        k,
+                        c,
+                        id_field='archive_id'))
     return sqls
 
 
 def link_file(src, des):
     # TODO move or symbollink
     pass
+
 
 def link_files(changes):
     # TODO
@@ -332,6 +425,5 @@ def main():
     print sqls
 
 
-
 if __name__ == '__main__':
-    main ()
+    main()
