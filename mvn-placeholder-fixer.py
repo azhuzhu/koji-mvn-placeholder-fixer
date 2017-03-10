@@ -120,7 +120,15 @@ def merge_data(archives, builds):
 def parse(build, cache, remote=False):
     buildinfo = get_buildinfo(build)
     buildpath = koji.pathinfo.mavenbuild(buildinfo)
-    build['buildpath'] = buildpath
+    if remote:
+        build['buildpath'] = os.path.join(
+            os.path.dirname(
+                os.path.abspath(__file__)),
+            ("vol/%(volume_name)s/packages/%(name)s/%(version)s/%(release)s" %  buildinfo),
+            'maven')
+
+    else:
+        build['buildpath'] = buildpath
     if 'archives' in build:
         # for archive
         archives = build['archives']
@@ -135,7 +143,7 @@ def parse(build, cache, remote=False):
                 if archive['archive_type'] == 'pom':
                     if remote:
                         try:
-                            download_pomfile(oripath, filepath)
+                            download_file(oripath, filepath)
                         except Exception as e:
                             print 'Downloading file: "%s" to "%s" failed...' % (oripath, filepath)
                             continue
@@ -186,6 +194,11 @@ def parse(build, cache, remote=False):
                 (oripath, filepath, key, mavenpath) = get_pathinfo(
                     buildinfo, archive, buildpath, remote)
                 if archive['archive_type'] != 'pom':
+                    if remote:
+                        try:
+                            download_file(oripath, filepath)
+                        except Exception as e:
+                            print 'Downloading file: "%s" to "%s" failed...' % (oripath, filepath)
                     # get from cache by key = 'bid|g|a|v'
                     cacheitems = cache.get(key, None)
                     if not cacheitems:
@@ -264,10 +277,10 @@ def get_pathinfo(buildinfo, archive, buildpath, remote):
         filepath = oripath
     key = str(buildinfo['id']) + \
         ('/%(group_id)s/%(artifact_id)s/%(version)s' % archive)
-    return (oripath, filepath, key, repopath)
+    return (oripath, filepath, key, repopath + '/' + archive['filename'])
 
 
-def download_pomfile(url, filepath):
+def download_file(url, filepath):
     basedir = os.path.dirname(filepath)
     if not os.path.exists(basedir):
         os.makedirs(basedir)
@@ -290,7 +303,7 @@ def gen_mavenpath(archive, new=False):
                 archiveinfo[k[4:]] = v
     else:
         archiveinfo = archive
-    return koji.pathinfo.mavenrepo(archiveinfo)
+    return koji.pathinfo.mavenrepo(archiveinfo) + '/' + archive['filename']
 
 
 def get_buildinfo(build, new=False):
@@ -341,6 +354,7 @@ def collect_changes(data):
                 item['archives'] = al
         if item:
             item['build_id'] = id
+            item['buildpath'] = d['buildpath']
             changes.append(item)
     return changes
 
@@ -396,13 +410,47 @@ def gen_sqls(changedata):
 
 
 def link_file(src, des):
-    # TODO move or symbollink
-    pass
+    if not os.path.exists(src):
+        return 'SRC_NOT_EXISTS'
+    if os.path.exists(des):
+        return 'DES_EXISTS'
+    basedir = os.path.dirname(des)
+    try:
+        if not os.path.exists(basedir):
+            os.makedirs(basedir)
+        os.symlink(os.path.abspath(src), des)
+        if os.path.exists(os.path.abspath(src + '.sha1')):
+            os.symlink(os.path.abspath(src + '.sha1'), des + '.sha1')
+        if os.path.exists(os.path.abspath(src + '.md5')):
+            os.symlink(os.path.abspath(src + '.md5'), des + '.md5')
+        kojihub._generate_maven_metadata(os.path.dirname(des))
+        return 'SUCCESS'
+    except Exception, e:
+        print e
+    return 'FAILED'
+
 
 
 def link_files(changes):
-    # TODO
-    pass
+    result = []
+    for change in changes:
+        build_id = change['build_id']
+        buildpath = change['buildpath']
+        new_buildpath = change.get('new_buildpath', buildpath)
+        if 'archives' in change:
+            for archive in change['archives']:
+                for c in archive[1]:
+                    if c[0] == 'mavenpath':
+                        mavenpath = c[1]
+                        new_mavenpath = c[2]
+                        if mavenpath and new_mavenpath:
+                            srcpath = os.path.join(buildpath, mavenpath)
+                            despath = os.path.join(new_buildpath, new_mavenpath)
+                        if srcpath != despath:
+                            result.append([link_file(srcpath, despath), build_id, srcpath, despath])
+                        else:
+                            result.append(['SKIP_SAME', build_id, srcpath, despath])
+    return result
 
 
 def main():
@@ -414,7 +462,7 @@ def main():
     cur = conn.cursor()
     remote = True
     if remote:
-        koji.pathinfo.topdir = 'https://brewweb.engineering.redhat.com/brewroot/'
+        koji.pathinfo.topdir = 'https://brewweb.engineering.redhat.com/brewroot'
     maven_archives = get_archives(cur)
     maven_builds = get_builds(cur)
     data = merge_data(maven_archives, maven_builds)
@@ -425,6 +473,8 @@ def main():
     print changes
     sqls = gen_sqls(changes)
     print sqls
+    link_result = link_files(changes)
+    print link_result
 
 
 if __name__ == '__main__':
