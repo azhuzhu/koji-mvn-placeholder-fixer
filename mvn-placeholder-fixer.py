@@ -1,13 +1,11 @@
 #!/usr/bin/python
 # coding=utf-8
 
-import imp
+from optparse import OptionParser
 import koji
 from hub import kojihub
 import sys
 import os
-import threading
-import Queue
 from koji.context import context
 import psycopg2
 import urllib2
@@ -16,22 +14,36 @@ import re
 from sets import Set
 
 
-# a bit of a hack to import the koji cli code
-fo = file('/usr/bin/koji', 'U')
-try:
-        clikoji = imp.load_module('clikoji', fo, fo.name, ('.py', 'U', 1))
-finally:
-        fo.close()
-
-
-# hack up fake options for benefit of watch_tasks()
-class fakeopts(object):
-        pass
-global options
-options = fakeopts()
-clikoji.options = options
-options.poll_interval = 5
-
+def get_opts():
+    """process command line arguments"""
+    usage = """
+Fix the dirty data caused by wrong maven placeholder parsing.
+Will update GAV in maven_archives and maven_builds, and version in build table,
+and also symlink the archive files on volumes, then regenerate repos by default.
+%prog [options]"""
+    parser = OptionParser(usage=usage)
+    parser.add_option('-d', '--dryrun', action='store_true', default=False,
+                                    help='Don\'t really execute any update and file operation')
+    parser.add_option('-r', '--remote', action='store_true', default=False,
+help='Would be specified when remote running, will copy files to current dictionary')
+    parser.add_option('-H', '--dbhost', default='localhost',
+                        help='Specify DB host')
+    parser.add_option('-P', '--dbport', default='5432', help='Specify DB port')
+    parser.add_option('-U', '--dbname', default='koji', help='Specify DB name')
+    parser.add_option('-u', '--user', default='koji', help='Specify DB username')
+    parser.add_option('-p', '--password', help='Specify DB user password')
+    parser.add_option('-s', '--ssl', action='store_true', default=False,
+            help='Whether login by ssl, otherwise by kerberos')
+    parser.add_option('--cert', default='~/.koji/client.pem', help='Specify client cert file for ssl login')
+    parser.add_option('--serverca', default='~/.koji/serverca.crt', help='Specify serverca for ssl login')
+    parser.add_option('-T', '--topdir', default='/mnt/koji', help='Specify topdir when local running')
+    parser.add_option('-t', '--topurl', default='https://brewweb.engineering.redhat.com/brewroot', help='Specify topurl when remote running')
+    parser.add_option('-k', '--huburl', default='https://localhost/kojihub', help='Specify spec hub xmlrpc url for regenerating repos')
+    parser.add_option('-e', '--export', action='store_true', default=False,
+            help='If exporting sql, symlink and regen-repo commands. If True, will skip the execution')
+    parser.add_option('-R', '--regen-repo', help='Only regenerate repos for the tags in specified files')
+    opts, args = parser.parse_args()
+    return args, opts
 
 def get_archives(cur):
     cur.execute(
@@ -426,7 +438,13 @@ def gen_sqls(changedata):
     return sqls
 
 
-def run_sqls(cur, sqls):
+def export_sql(sqls, filepath):
+    with open(filepath, 'wb') as f:
+        for sql in sqls:
+            f.write(sql + ";\n")
+
+
+def run_sqls(cur, sqls): 
     for sql in sqls:
         try:
             cur.execute(sql)
@@ -434,17 +452,18 @@ def run_sqls(cur, sqls):
             print 'fail to run SQL:\n\'%s\'\n%s' % (sql, e.arg[0])
 
 
-
-def link_file(src, des):
+def link_file(src, des, dryrun=False):
     if not os.path.exists(src):
         return 'SRC_NOT_EXISTS'
     if os.path.exists(des):
         return 'DES_EXISTS'
     basedir = os.path.dirname(des)
+    if dryrun:
+        return 'DRYRUN'
     try:
         if not os.path.exists(basedir):
             os.makedirs(basedir)
-        os.symlink(os.path.abspath(src), des)
+        os.symlink(os.path.relpath(src, des), des)
         if os.path.exists(os.path.abspath(src + '.sha1')):
             os.symlink(os.path.abspath(src + '.sha1'), des + '.sha1')
         if os.path.exists(os.path.abspath(src + '.md5')):
@@ -456,7 +475,7 @@ def link_file(src, des):
     return 'FAILED'
 
 
-def link_files(changes):
+def link_files(changes, dryrun=False):
     result = []
     for change in changes:
         build_id = change['build_id']
@@ -472,10 +491,20 @@ def link_files(changes):
                             srcpath = os.path.join(buildpath, mavenpath)
                             despath = os.path.join(new_buildpath, new_mavenpath)
                         if srcpath != despath:
-                            result.append([link_file(srcpath, despath), build_id, srcpath, despath])
+                            result.append([link_file(srcpath, despath, dryrun), build_id, srcpath, despath])
                         else:
                             result.append(['SKIP_SAME', build_id, srcpath, despath])
     return result
+
+
+def gen_link_cmds(link_result, filepath):
+    with open(filepath, 'wb') as f:
+        f.write('#!/bin/bash\n\n')
+        for r in link_result:
+            f.write('# build#%d, expect %s\n' % (r[1], r[0]))
+            if r[0] not in ['SUCCESS', 'DRYRUN']:
+                f.write('# ')
+            f.write('ln -s \'%s\' \'%s\'\n\n' % (os.path.relpath(r[2], r[3]), r[3]))
 
 
 def get_tags(session, changes):
@@ -483,7 +512,7 @@ def get_tags(session, changes):
     for change in changes:
         taginfos = session.listTags(change['build_id'])
         for taginfo in taginfos:
-            tags.add(taginfo['id'])
+            tags.add(str(taginfo['id']))
     return tags
 
 
@@ -497,18 +526,70 @@ def regen_repo(session, tag_id):
     return new_repo_id
 
 
-def  main():
-    dryrun = False
+def regen_repos(session, tags):
+    for tag_id in tags:
+        try:
+            new_repo_id = regen_repo(session, tag_id)
+            print "regenerate repo for tag#%s -> new_repo#%s" % (tag_id, new_repo_id)
+        except Exception:
+            print "fail to regen repo for tag#%s" % tag_id
+
+
+def export_tags(tags, filepath):
+    with open(filepath, 'wb') as f:
+        f.write('\n'.join(tags))
+
+
+def get_session(options):
+    if options.ssl:
+        cert = os.path.abspath(os.path.expanduser(options.cert))
+        serverca = os.path.abspath(os.path.expanduser(options.serverca))
+        print 'Connecting to \'%s\'' % options.huburl
+        print 'cert: %s\nserverca:%s' % (cert, serverca)
+        session = koji.ClientSession(options.huburl, {'anon_retry': True})
+        session.ssl_login(cert=os.path.abspath(os.path.expanduser(options.cert)), serverca=os.path.abspath(os.path.expanduser(options.serverca)))
+    else:
+        session = koji.ClientSession(options.huburl, {'anon_retry': True, 'krbservice': 'brewhub'})
+    #session = koji.ClientSession('http://brewhub.engineering.redhat.com/kojihub', {'anon_retry':True})
+    #session = koji.ClientSession('http://brew-test.devel.redhat.com/kojihub', {'anon_retry':True})
+    #session = koji.ClientSession('http://brewhub.devel.redhat.com/brewhub', {'anon_retry':True})
+        session.krb_login()
+    return session
+
+
+def main():
+    args, options = get_opts()
+    if options.regen_repo:
+        session = get_session(options)
+        tags = []
+        with open(options.regen_repo, 'r') as f:
+            for line in f:
+                if line:
+                    tags.append(line[:-1])
+        regen_repos(session, tags)
+
+
+    dryrun = options.dryrun
+    remote = options.remote
+    export = options.export
+    dbopts = {'host': options.dbhost,
+              'port': options.dbport,
+              'dbname': options.dbname,
+              'user': options.user,
+              }
+    if options.password:
+        dbopts['password': options.password]
     try:
-        conn = psycopg2.connect("dbname='koji' user='koji'")
+        conn = psycopg2.connect(**dbopts)
     except Exception:
         print 'Can not connect to db'
         raise
     cur = conn.cursor()
     cur.execute('BEGIN')
-    remote = True
     if remote:
-        koji.pathinfo.topdir = 'https://brewweb.engineering.redhat.com/brewroot'
+        koji.pathinfo.topdir = options.topurl
+    else:
+        koji.pathinfo.topdir = options.topdir
     maven_archives = get_archives(cur)
     maven_builds = get_builds(cur)
     data = merge_data(maven_archives, maven_builds)
@@ -516,31 +597,28 @@ def  main():
     for d in data.itervalues():
         parse(d, cache, remote)
     changes = collect_changes(data)
-    print changes
+    print 'Changes:\n%s' % changes
     sqls = gen_sqls(changes)
-    print sqls
-    if not dryrun:
+    print 'Update SQLs:\n%s' % sqls
+    if export:
+        export_sql(sqls, 'updates.sql')
+    if not dryrun and not export:
         run_sqls(cur, sqls)
-        cur.execute('COMMIT')
-        link_result = link_files(changes)
-        print link_result
+    cur.execute('COMMIT')
 
-    session = koji.ClientSession('https://brew-dev/kojihub', {'anon_retry': True})
-    # session = koji.ClientSession('https://brewhub.engineering.redhat.com/kojihub/', {'anon_retry':True, 'krbservice':'brewhub'})
-    #session = koji.ClientSession('http://brew-test.devel.redhat.com/kojihub', {'anon_retry':True})
-    #session = koji.ClientSession('http://brewhub.devel.redhat.com/brewhub', {'anon_retry':True})
-    # session.krb_login()
-    session.ssl_login(cert='/home/yzhu/.koji/client.pem', serverca='/home/yzhu/.koji/serverca.crt')
+    link_result = link_files(changes, dryrun or export)
+    print 'Symbol Link Result:\n%s' % link_result
+    if export:
+        gen_link_cmds(link_result, 'link_files.sh')
+
+    session = get_session(options)
 
     tags = get_tags(session, changes)
     print "those tags' repos will be re-generated: %s" % tags
-    if not dryrun:
-        for tag_id in tags:
-            try:
-                new_repo_id = regen_repo(session, tag_id)
-                print "regenerate repo for tag#%d -> new_repo#%d)" % (tag_id, new_repo_id)
-            except Exception:
-                print "fail to regen repo for tag#%d" % tag_id
+    if not dryrun and not export:
+        regen_repos(session, tags)
+    if export:
+        export_tags(tags, 'tag-list.txt')
 
 
 if __name__ == '__main__':
