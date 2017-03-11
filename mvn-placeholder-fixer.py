@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # coding=utf-8
 
-
+import imp
 import koji
 from hub import kojihub
 import sys
@@ -12,8 +12,25 @@ from koji.context import context
 import psycopg2
 import urllib2
 import commands
-import shutil
 import re
+from sets import Set
+
+
+# a bit of a hack to import the koji cli code
+fo = file('/usr/bin/koji', 'U')
+try:
+        clikoji = imp.load_module('clikoji', fo, fo.name, ('.py', 'U', 1))
+finally:
+        fo.close()
+
+
+# hack up fake options for benefit of watch_tasks()
+class fakeopts(object):
+        pass
+global options
+options = fakeopts()
+clikoji.options = options
+options.poll_interval = 5
 
 
 def get_archives(cur):
@@ -409,6 +426,15 @@ def gen_sqls(changedata):
     return sqls
 
 
+def run_sqls(cur, sqls):
+    for sql in sqls:
+        try:
+            cur.execute(sql)
+        except Exception, e:
+            print 'fail to run SQL:\n\'%s\'\n%s' % (sql, e.arg[0])
+
+
+
 def link_file(src, des):
     if not os.path.exists(src):
         return 'SRC_NOT_EXISTS'
@@ -428,7 +454,6 @@ def link_file(src, des):
     except Exception, e:
         print e
     return 'FAILED'
-
 
 
 def link_files(changes):
@@ -453,13 +478,34 @@ def link_files(changes):
     return result
 
 
-def main():
+def get_tags(session, changes):
+    tags = Set()
+    for change in changes:
+        taginfos = session.listTags(change['build_id'])
+        for taginfo in taginfos:
+            tags.add(taginfo['id'])
+    return tags
+
+
+def regen_repo(session, tag_id):
+    repo_info = session.getRepo(tag_id, strict=True)
+    if koji.REPO_STATES[repo_info['state']] in ['READY', 'EXPIRED']:
+        print "Duplicating repo"
+        rtaskid = session.newRepo(tag_id)
+        clikoji.watch_tasks(session, [rtaskid])
+        new_repo_id, event_id = session.getTaskResult(rtaskid)
+    return new_repo_id
+
+
+def  main():
+    dryrun = False
     try:
         conn = psycopg2.connect("dbname='koji' user='koji'")
     except Exception:
         print 'Can not connect to db'
         raise
     cur = conn.cursor()
+    cur.execute('BEGIN')
     remote = True
     if remote:
         koji.pathinfo.topdir = 'https://brewweb.engineering.redhat.com/brewroot'
@@ -473,8 +519,28 @@ def main():
     print changes
     sqls = gen_sqls(changes)
     print sqls
-    link_result = link_files(changes)
-    print link_result
+    if not dryrun:
+        run_sqls(cur, sqls)
+        cur.execute('COMMIT')
+        link_result = link_files(changes)
+        print link_result
+
+    session = koji.ClientSession('https://brew-dev/kojihub', {'anon_retry': True})
+    # session = koji.ClientSession('https://brewhub.engineering.redhat.com/kojihub/', {'anon_retry':True, 'krbservice':'brewhub'})
+    #session = koji.ClientSession('http://brew-test.devel.redhat.com/kojihub', {'anon_retry':True})
+    #session = koji.ClientSession('http://brewhub.devel.redhat.com/brewhub', {'anon_retry':True})
+    # session.krb_login()
+    session.ssl_login(cert='/home/yzhu/.koji/client.pem', serverca='/home/yzhu/.koji/serverca.crt')
+
+    tags = get_tags(session, changes)
+    print "those tags' repos will be re-generated: %s" % tags
+    if not dryrun:
+        for tag_id in tags:
+            try:
+                new_repo_id = regen_repo(session, tag_id)
+                print "regenerate repo for tag#%d -> new_repo#%d)" % (tag_id, new_repo_id)
+            except Exception:
+                print "fail to regen repo for tag#%d" % tag_id
 
 
 if __name__ == '__main__':
