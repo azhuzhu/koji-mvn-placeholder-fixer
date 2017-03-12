@@ -1,6 +1,7 @@
 #!/usr/bin/python
 # coding=utf-8
 
+import imp
 from optparse import OptionParser
 import koji
 from hub import kojihub
@@ -12,6 +13,20 @@ import urllib2
 import commands
 import re
 from sets import Set
+
+# a bit of a hack to import the koji cli code
+fo = file('/usr/bin/koji', 'U')
+try:
+    clikoji = imp.load_module('clikoji', fo, fo.name, ('.py', 'U', 1))
+finally:
+    fo.close()
+# hack up fake options for benefit of watch_tasks()
+class fakeopts(object):
+    pass
+global options
+options = fakeopts()
+clikoji.options = options
+options.poll_interval = 5
 
 
 def get_opts():
