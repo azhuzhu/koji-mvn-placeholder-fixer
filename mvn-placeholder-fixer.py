@@ -22,28 +22,61 @@ Will update GAV in maven_archives and maven_builds, and version in build table,
 and also symlink the archive files on volumes, then regenerate repos by default.
 %prog [options]"""
     parser = OptionParser(usage=usage)
-    parser.add_option('-d', '--dryrun', action='store_true', default=False,
-                                    help='Don\'t really execute any update and file operation')
-    parser.add_option('-r', '--remote', action='store_true', default=False,
-help='Would be specified when remote running, will copy files to current dictionary')
+    parser.add_option(
+        '-d',
+        '--dryrun',
+        action='store_true',
+        default=False,
+        help='Don\'t really execute any update and file operation')
+    parser.add_option(
+        '-r',
+        '--remote',
+        action='store_true',
+        default=False,
+        help='Would be specified when remote running, will copy files to current dictionary')
     parser.add_option('-H', '--dbhost', default='localhost',
-                        help='Specify DB host')
+                      help='Specify DB host')
     parser.add_option('-P', '--dbport', default='5432', help='Specify DB port')
     parser.add_option('-U', '--dbname', default='koji', help='Specify DB name')
-    parser.add_option('-u', '--user', default='koji', help='Specify DB username')
+    parser.add_option(
+        '-u',
+        '--user',
+        default='koji',
+        help='Specify DB username')
     parser.add_option('-p', '--password', help='Specify DB user password')
     parser.add_option('-s', '--ssl', action='store_true', default=False,
-            help='Whether login by ssl, otherwise by kerberos')
-    parser.add_option('--cert', default='~/.koji/client.pem', help='Specify client cert file for ssl login')
-    parser.add_option('--serverca', default='~/.koji/serverca.crt', help='Specify serverca for ssl login')
-    parser.add_option('-T', '--topdir', default='/mnt/koji', help='Specify topdir when local running')
-    parser.add_option('-t', '--topurl', default='https://brewweb.engineering.redhat.com/brewroot', help='Specify topurl when remote running')
-    parser.add_option('-k', '--huburl', default='https://localhost/kojihub', help='Specify spec hub xmlrpc url for regenerating repos')
-    parser.add_option('-e', '--export', action='store_true', default=False,
-            help='If exporting sql, symlink and regen-repo commands. If True, will skip the execution')
-    parser.add_option('-R', '--regen-repo', help='Only regenerate repos for the tags in specified files')
+                      help='Whether login by ssl, otherwise by kerberos')
+    parser.add_option('--cert', default='~/.koji/client.pem',
+                      help='Specify client cert file for ssl login')
+    parser.add_option(
+        '--serverca',
+        default='~/.koji/serverca.crt',
+        help='Specify serverca for ssl login')
+    parser.add_option('-T', '--topdir', default='/mnt/koji',
+                      help='Specify topdir when local running')
+    parser.add_option(
+        '-t',
+        '--topurl',
+        default='https://brewweb.engineering.redhat.com/brewroot',
+        help='Specify topurl when remote running')
+    parser.add_option(
+        '-k',
+        '--huburl',
+        default='https://localhost/kojihub',
+        help='Specify spec hub xmlrpc url for regenerating repos')
+    parser.add_option(
+        '-e',
+        '--export',
+        action='store_true',
+        default=False,
+        help='If exporting sql, symlink and regen-repo commands. If True, will skip the execution')
+    parser.add_option(
+        '-R',
+        '--regen-repo',
+        help='Only regenerate repos for the tags in specified files')
     opts, args = parser.parse_args()
     return args, opts
+
 
 def get_archives(cur):
     cur.execute(
@@ -153,7 +186,8 @@ def parse(build, cache, remote=False):
         build['buildpath'] = os.path.join(
             os.path.dirname(
                 os.path.abspath(__file__)),
-            ("vol/%(volume_name)s/packages/%(name)s/%(version)s/%(release)s" %  buildinfo),
+            ("vol/%(volume_name)s/packages/%(name)s/%(version)s/%(release)s" %
+             buildinfo),
             'maven')
 
     else:
@@ -444,11 +478,11 @@ def export_sql(sqls, filepath):
             f.write(sql + ";\n")
 
 
-def run_sqls(cur, sqls): 
+def run_sqls(cur, sqls):
     for sql in sqls:
         try:
             cur.execute(sql)
-        except Exception, e:
+        except Exception as e:
             print 'fail to run SQL:\n\'%s\'\n%s' % (sql, e.arg[0])
 
 
@@ -470,7 +504,7 @@ def link_file(src, des, dryrun=False):
             os.symlink(os.path.abspath(src + '.md5'), des + '.md5')
         kojihub._generate_maven_metadata(os.path.dirname(des))
         return 'SUCCESS'
-    except Exception, e:
+    except Exception as e:
         print e
     return 'FAILED'
 
@@ -489,11 +523,14 @@ def link_files(changes, dryrun=False):
                         new_mavenpath = c[2]
                         if mavenpath and new_mavenpath:
                             srcpath = os.path.join(buildpath, mavenpath)
-                            despath = os.path.join(new_buildpath, new_mavenpath)
+                            despath = os.path.join(
+                                new_buildpath, new_mavenpath)
                         if srcpath != despath:
-                            result.append([link_file(srcpath, despath, dryrun), build_id, srcpath, despath])
+                            result.append(
+                                [link_file(srcpath, despath, dryrun), build_id, srcpath, despath])
                         else:
-                            result.append(['SKIP_SAME', build_id, srcpath, despath])
+                            result.append(
+                                ['SKIP_SAME', build_id, srcpath, despath])
     return result
 
 
@@ -504,7 +541,8 @@ def gen_link_cmds(link_result, filepath):
             f.write('# build#%d, expect %s\n' % (r[1], r[0]))
             if r[0] not in ['SUCCESS', 'DRYRUN']:
                 f.write('# ')
-            f.write('ln -s \'%s\' \'%s\'\n\n' % (os.path.relpath(r[2], r[3]), r[3]))
+            f.write('ln -s \'%s\' \'%s\'\n\n' %
+                    (os.path.relpath(r[2], r[3]), r[3]))
 
 
 def get_tags(session, changes):
@@ -547,9 +585,16 @@ def get_session(options):
         print 'Connecting to \'%s\'' % options.huburl
         print 'cert: %s\nserverca:%s' % (cert, serverca)
         session = koji.ClientSession(options.huburl, {'anon_retry': True})
-        session.ssl_login(cert=os.path.abspath(os.path.expanduser(options.cert)), serverca=os.path.abspath(os.path.expanduser(options.serverca)))
+        session.ssl_login(
+            cert=os.path.abspath(
+                os.path.expanduser(
+                    options.cert)), serverca=os.path.abspath(
+                os.path.expanduser(
+                    options.serverca)))
     else:
-        session = koji.ClientSession(options.huburl, {'anon_retry': True, 'krbservice': 'brewhub'})
+        session = koji.ClientSession(
+            options.huburl, {
+                'anon_retry': True, 'krbservice': 'brewhub'})
     #session = koji.ClientSession('http://brewhub.engineering.redhat.com/kojihub', {'anon_retry':True})
     #session = koji.ClientSession('http://brew-test.devel.redhat.com/kojihub', {'anon_retry':True})
     #session = koji.ClientSession('http://brewhub.devel.redhat.com/brewhub', {'anon_retry':True})
@@ -567,7 +612,6 @@ def main():
                 if line:
                     tags.append(line[:-1])
         regen_repos(session, tags)
-
 
     dryrun = options.dryrun
     remote = options.remote
