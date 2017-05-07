@@ -637,7 +637,7 @@ def main():
               'user': options.user,
               }
     if options.password:
-        dbopts['password': options.password]
+        dbopts['password']: options.password
     try:
         conn = psycopg2.connect(**dbopts)
     except Exception:
